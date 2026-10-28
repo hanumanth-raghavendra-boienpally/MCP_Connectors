@@ -67,19 +67,46 @@ so give callers a read-only key if they should not write.
 
 ## Try it against a real Elasticsearch (Docker)
 
-1. Start a throwaway cluster with security off (testing only):
-   ```bash
-   docker run --rm -p 9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.0
-   ```
-2. Start the connector allowing localhost (second terminal):
-   - PowerShell: `$env:ES_ALLOWED_HOSTS = "localhost"; uv run python -m connectors.elasticsearch.server`
-   - cmd: `set ES_ALLOWED_HOSTS=localhost` then `uv run python -m connectors.elasticsearch.server`
-3. Call it as one caller (third terminal), shell syntax as in `scripts/try_it.py`:
-   `ES_URL=http://localhost:9200`, `ES_API_KEY=anything`, then `uv run python scripts/try_it.py`.
-   With security off, Elasticsearch ignores the key, but the connector still requires the header.
+Three terminals (Windows Command Prompt syntax; on bash use `export` instead of `set`).
 
-If the connector itself runs in Docker, use `http://host.docker.internal:9200`
-as the cluster URL and put `host.docker.internal` in `ES_ALLOWED_HOSTS`.
+**Terminal 1** (any folder): start a throwaway Elasticsearch with security off. Testing only.
+```cmd
+docker run --rm -p 127.0.0.1:9201:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+```
+Wait about 60 seconds, then open `http://127.0.0.1:9201` in a browser. You should see JSON containing `"cluster_name"`.
+
+**Terminal 2** (in this `elasticsearch` folder): start the connector, allowing that host.
+```cmd
+set ES_ALLOWED_HOSTS=127.0.0.1
+uv run python -m connectors.elasticsearch.server
+```
+
+**Terminal 3** (in this `elasticsearch` folder): call it as one caller.
+```cmd
+set ES_URL=http://127.0.0.1:9201
+set ES_API_KEY=anything
+uv run python scripts/try_it.py
+```
+With security off, Elasticsearch ignores the key, but the connector still requires the header.
+
+**Why `127.0.0.1` and port 9201?** On some Windows machines `localhost:9200` stops answering from the host even though Elasticsearch is healthy inside the container (check with `docker exec <container-id> curl -s http://localhost:9200`). Using `127.0.0.1` and a fresh host port avoids it. If it still hangs, quit Docker Desktop, run `wsl --shutdown`, and start Docker Desktop again.
+
+If the connector itself runs in Docker, use `http://host.docker.internal:9201` as the cluster URL and put `host.docker.internal` in `ES_ALLOWED_HOSTS`.
+
+## End-to-end check: did it really happen in Elasticsearch?
+
+`scripts/verify_e2e.py` does each action **through the connector**, then asks
+Elasticsearch **directly** whether it happened (write, read back, search, delete),
+pauses so you can open the document in a browser and screenshot it, then deletes
+its own throwaway index (`mcp-verify-<random>`). Run it with terminals 1 and 2
+above still open, from this folder:
+```cmd
+set ES_URL=http://127.0.0.1:9201
+set ES_API_KEY=anything
+uv run python scripts/verify_e2e.py
+```
+Expected last line: `Summary: 11 passed, 0 failed`. If the connector or Elasticsearch is
+not answering, it says which one instead of failing with a trace.
 
 ## In Docker
 
@@ -107,4 +134,7 @@ whole `elasticsearch/` folder and leave out `.venv`, `__pycache__`,
 ## Status (verified 2026-10-28)
 
 - Automated suite against fake clusters: 34 passing. Breaking the allowlist on purpose makes 3 of them fail.
-- **Not yet run against a real Elasticsearch.** Do the Docker steps above once.
+- Run against a real Elasticsearch 8.15 in Docker: all nine tools work.
+- `scripts/verify_e2e.py` against the same real Elasticsearch: 11 of 11 checks pass, each
+  confirmed directly in Elasticsearch, not only through the connector.
+- Not yet tested through the workflow designer with an agent calling the tools.
