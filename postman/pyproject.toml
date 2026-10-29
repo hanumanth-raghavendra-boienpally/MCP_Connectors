@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["connector_core*", "connectors*"]
+
+[project]
+name = "postman-mcp-connector"
+version = "0.1.0"
+description = "Multi-tenant, stateless HTTP MCP connector for Postman, built with FastMCP"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=4.1,<5",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
