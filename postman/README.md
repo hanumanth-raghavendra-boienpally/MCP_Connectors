@@ -7,6 +7,8 @@ This folder is standalone: it shares no code with other connectors in the repo.
 
 ## Quick start
 
+Needs **Python 3.12 or newer** and [`uv`](https://docs.astral.sh/uv/).
+
 Run in Command Prompt, inside this `postman` folder:
 
 ```cmd
@@ -114,6 +116,9 @@ docker build -t mcp-postman .
 docker run --rm -p 127.0.0.1:8000:8000 mcp-postman
 ```
 
+The image includes a `HEALTHCHECK` that calls `/health` every 30 seconds, so
+`docker ps` shows the container as `healthy` or `unhealthy`.
+
 ## Rules this connector follows
 
 1. The API key comes from the request headers, never from env vars or files.
@@ -130,6 +135,21 @@ docker run --rm -p 127.0.0.1:8000:8000 mcp-postman
 
 Copy the whole `postman/` folder and leave out `.venv`, `__pycache__`,
 `.pytest_cache` and `*.egg-info`.
+
+## Security checks (2026-10-30)
+
+Run on the whole repo with the company's verification steps:
+
+| Check | Tool | Result |
+|---|---|---|
+| Secrets in code and full git history | Gitleaks 8.30 | No leaks found |
+| Known vulnerabilities in pinned libraries (`uv.lock`) | Trivy 0.76 | 0 (all severities) |
+| Dockerfile misconfiguration | Trivy 0.76 | 0 |
+| Signed release artifacts | Cosign | None published, so not applicable |
+| Library licenses | pip-licenses | All permissive (MIT, BSD, Apache-2.0, ISC; `certifi` is MPL-2.0, used unmodified) |
+
+This folder has no LICENSE file of its own yet; the license for company code is
+pending a decision. Re-run the scans after any dependency change.
 
 ## Status (2026-10-29)
 

@@ -5,6 +5,8 @@ cluster address and credentials on every request**; the server stores nothing.
 
 ## Quick start
 
+Needs **Python 3.12 or newer** and [`uv`](https://docs.astral.sh/uv/).
+
 ```bash
 uv sync --extra dev
 uv run pytest -q        # 34 tests, about 10 seconds, no Elasticsearch needed
@@ -115,6 +117,9 @@ docker build -t mcp-elasticsearch .
 docker run --rm -p 127.0.0.1:8000:8000 -e ES_ALLOWED_HOSTS=es.example.com mcp-elasticsearch
 ```
 
+The image includes a `HEALTHCHECK` that calls `/health` every 30 seconds, so
+`docker ps` shows the container as `healthy` or `unhealthy`.
+
 ## Rules this connector follows
 
 1. Credentials and the cluster URL come from the request headers, never from env vars or files.
@@ -130,6 +135,21 @@ docker run --rm -p 127.0.0.1:8000:8000 -e ES_ALLOWED_HOSTS=es.example.com mcp-el
 It shares no code with other connectors. To move it into a repo, copy the
 whole `elasticsearch/` folder and leave out `.venv`, `__pycache__`,
 `.pytest_cache` and `*.egg-info`.
+
+## Security checks (2026-10-30)
+
+Run on the whole repo with the company's verification steps:
+
+| Check | Tool | Result |
+|---|---|---|
+| Secrets in code and full git history | Gitleaks 8.30 | No leaks found |
+| Known vulnerabilities in pinned libraries (`uv.lock`) | Trivy 0.76 | 0 (all severities) |
+| Dockerfile misconfiguration | Trivy 0.76 | 0 |
+| Signed release artifacts | Cosign | None published, so not applicable |
+| Library licenses | pip-licenses | All permissive (MIT, BSD, Apache-2.0, ISC; `certifi` is MPL-2.0, used unmodified) |
+
+This folder has no LICENSE file of its own yet; the license for company code is
+pending a decision. Re-run the scans after any dependency change.
 
 ## Status (verified 2026-10-28)
 
