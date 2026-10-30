@@ -175,6 +175,8 @@ docker build -t mcp-supabase .
 docker run --rm -p 127.0.0.1:8000:8000 mcp-supabase
 ```
 
+The image installs exactly the versions pinned in `requirements.txt`, the same ones the
+security scan checks.
 The image includes a `HEALTHCHECK` that calls `/health` every 30 seconds, so
 `docker ps` shows the container as `healthy` or `unhealthy`.
 

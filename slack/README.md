@@ -100,8 +100,8 @@ set SLACK_TOKEN=xoxb-...
 set SLACK_CHANNEL_ID=C0123456789
 uv run python scripts/verify_e2e.py
 ```
-Without the `reactions:read` scope, the reaction's direct check is skipped and
-you confirm it by eye.
+Expected last line: `Summary: 8 passed, 0 failed`. Without the `reactions:read` scope, the
+reaction's direct check is skipped and you confirm it by eye.
 
 ## In Docker
 
@@ -112,6 +112,8 @@ docker build --build-arg CONNECTOR=slack -t mcp-slack .
 docker run --rm -p 127.0.0.1:8000:8000 mcp-slack
 ```
 
+The image installs exactly the versions pinned in `requirements.txt`, the same ones the
+security scan checks.
 The image includes a `HEALTHCHECK` that calls `/health` every 30 seconds, so
 `docker ps` shows the container as `healthy` or `unhealthy`.
 

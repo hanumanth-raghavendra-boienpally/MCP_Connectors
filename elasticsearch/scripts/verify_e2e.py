@@ -5,8 +5,8 @@ Elasticsearch DIRECTLY (not through the connector) to confirm it happened.
 It uses a throwaway index named mcp-verify-<random> and deletes it at the end.
 
 Needs the connector and an Elasticsearch running. Usage:
-  PowerShell:  $env:ES_URL = "http://localhost:9200"; $env:ES_API_KEY = "anything"
-  cmd:         set ES_URL=http://localhost:9200   and   set ES_API_KEY=anything
+  PowerShell:  $env:ES_URL = "http://127.0.0.1:9201"; $env:ES_API_KEY = "anything"
+  cmd:         set ES_URL=http://127.0.0.1:9201   and   set ES_API_KEY=anything
   then:        uv run python scripts/verify_e2e.py [connector-url] [--no-pause]
 
 With the local Docker Elasticsearch (security off) any ES_API_KEY works.

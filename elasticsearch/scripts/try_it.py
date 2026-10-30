@@ -1,10 +1,10 @@
 """Call a running Elasticsearch connector as one caller and print what comes back.
 
 Usage (variables last only for that terminal window):
-  PowerShell:  $env:ES_URL = "http://localhost:9200"
+  PowerShell:  $env:ES_URL = "http://127.0.0.1:9201"
                $env:ES_API_KEY = "anything-if-security-is-off"
                uv run python scripts/try_it.py
-  cmd:         set ES_URL=http://localhost:9200       (no quotes)
+  cmd:         set ES_URL=http://127.0.0.1:9201       (no quotes)
                set ES_API_KEY=anything
                uv run python scripts/try_it.py
   bash/zsh:    ES_URL=... ES_API_KEY=... uv run python scripts/try_it.py [connector-url]

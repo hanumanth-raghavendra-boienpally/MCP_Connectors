@@ -2,8 +2,10 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir "fastmcp>=4.1,<5" "httpx>=0.27"
+# Install the exact library versions pinned in requirements.txt (the ones the
+# security scan checked), not whatever is newest on the day of the build.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY connector_core ./connector_core
 COPY connectors ./connectors

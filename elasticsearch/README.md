@@ -7,7 +7,7 @@ cluster address and credentials on every request**; the server stores nothing.
 
 Needs **Python 3.12 or newer** and [`uv`](https://docs.astral.sh/uv/).
 
-```bash
+```cmd
 uv sync --extra dev
 uv run pytest -q        # 37 tests, about 10 seconds, no Elasticsearch needed
 ```
@@ -26,7 +26,7 @@ python -m pytest -q
 
 ## Run it
 
-```bash
+```cmd
 uv run python -m connectors.elasticsearch.server   # serves http://0.0.0.0:8000/mcp
 ```
 
@@ -121,11 +121,13 @@ not answering, it says which one instead of failing with a trace.
 
 ## In Docker
 
-```bash
+```cmd
 docker build -t mcp-elasticsearch .
 docker run --rm -p 127.0.0.1:8000:8000 -e ES_ALLOWED_HOSTS=es.example.com mcp-elasticsearch
 ```
 
+The image installs exactly the versions pinned in `requirements.txt`, the same ones the
+security scan checks.
 The image includes a `HEALTHCHECK` that calls `/health` every 30 seconds, so
 `docker ps` shows the container as `healthy` or `unhealthy`.
 
