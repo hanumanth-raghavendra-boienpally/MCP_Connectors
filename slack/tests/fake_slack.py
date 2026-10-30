@@ -10,7 +10,7 @@ import time
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 WORKSPACES = {
@@ -43,9 +43,16 @@ async def conversations_list(request: Request):
 
 async def conversations_history(request: Request):
     ws = _workspace(request)
+    if request.query_params.get("channel") == "CREDIRECT":
+        return RedirectResponse("/trap", status_code=302)
     if ws is None:
         return JSONResponse({"ok": False, "error": "invalid_auth"})
     return JSONResponse({"ok": True, "messages": ws["messages"]})
+
+
+async def trap(request: Request):
+    _workspace(request)
+    return JSONResponse({"ok": True, "messages": []})
 
 
 async def chat_post_message(request: Request):
@@ -67,6 +74,7 @@ app = Starlette(
         Route("/conversations.history", conversations_history),
         Route("/chat.postMessage", chat_post_message, methods=["POST"]),
         Route("/users.list", rate_limited),
+        Route("/trap", trap, methods=["GET", "POST"]),
     ]
 )
 

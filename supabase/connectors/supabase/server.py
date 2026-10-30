@@ -116,6 +116,8 @@ def _error_detail(resp: httpx.Response) -> str:
 
 def _raise_for_status(resp: httpx.Response) -> None:
     status = resp.status_code
+    if 300 <= status < 400:
+        raise ToolError(f"Supabase answered with a redirect (HTTP {status}). Redirects are not followed, so credentials never go to another address.")
     if status < 400:
         return
     if status == 401:

@@ -15,9 +15,17 @@ Run in Command Prompt, inside this `slack` folder:
 uv sync --extra dev
 uv run pytest -q
 ```
-Expect `9 passed` in about 10 seconds. No Slack account is needed: the tests
+Expect `10 passed` in about 10 seconds. No Slack account is needed: the tests
 start the real connector next to a fake Slack and check that concurrent callers
 never see each other's data.
+
+Without `uv` (classic pip), in PowerShell inside this `slack` folder:
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest
+python -m pytest -q
+```
 
 ## Run the connector
 
@@ -133,6 +141,19 @@ The image includes a `HEALTHCHECK` that calls `/health` every 30 seconds, so
 Copy the whole `slack/` folder and leave out `.venv`, `__pycache__`,
 `.pytest_cache` and `*.egg-info`.
 
+## Compared with the official Slack MCP server
+
+| | Official (`mcp.slack.com`) | This connector |
+|---|---|---|
+| Auth | OAuth user login only; needs an approved, published or internal Slack app | Bot token per request in a header |
+| Works in a designer that registers fixed headers | No | Yes |
+| List channels and users, read history and threads, post, react | Yes | Yes |
+| Search messages, files, users and channels | Yes | No |
+| Scheduled and draft messages, canvases, lists, file upload | Yes | No |
+
+The company does not use Slack, so this connector is kept as a reference for the
+pattern rather than extended.
+
 ## Security checks (2026-10-30)
 
 Run on the whole repo with the company's verification steps:
@@ -140,7 +161,7 @@ Run on the whole repo with the company's verification steps:
 | Check | Tool | Result |
 |---|---|---|
 | Secrets in code and full git history | Gitleaks 8.30 | No leaks found |
-| Known vulnerabilities in pinned libraries (`uv.lock`) | Trivy 0.76 | 0 (all severities); the old `dnspython` 2.8.0 flagged HIGH was removed by requiring Python 3.12 |
+| Known vulnerabilities in pinned libraries (`uv.lock` and `requirements.txt`) | Trivy 0.76 | 0 (all severities); the old `dnspython` 2.8.0 flagged HIGH was removed by requiring Python 3.12 |
 | Dockerfile misconfiguration | Trivy 0.76 | 0 |
 | Signed release artifacts | Cosign | None published, so not applicable |
 | Library licenses | pip-licenses | All permissive (MIT, BSD, Apache-2.0, ISC; `certifi` is MPL-2.0, used unmodified) |
@@ -148,10 +169,15 @@ Run on the whole repo with the company's verification steps:
 This folder has no LICENSE file of its own yet; the license for company code is
 pending a decision. Re-run the scans after any dependency change.
 
-## Status
+## Status (2026-10-30)
 
-- 9 automated tests against a fake Slack.
+- 10 automated tests against a fake Slack. Deliberately breaking each protection makes
+  tests fail: first caller's token reused (6), token printed to the log (1), token leaked
+  in an error (1), any Authorization value accepted (1), rate limit not reported (1),
+  redirects followed (1).
+- Redirects are refused with a clear error and never followed, so credentials cannot be
+  sent to another address. A test redirects to a trap address and proves it is never reached.
 - Tools exercised against a real Slack workspace (personal test workspace).
 - `scripts/verify_e2e.py` against a real Slack workspace (personal test workspace):
-  all checks pass (`0 failed`): post, reaction and thread reply confirmed directly in Slack.
+  8 of 8 checks pass: post, reaction and thread reply confirmed directly in Slack.
 - Not yet tested through the workflow designer with an agent calling the tools.

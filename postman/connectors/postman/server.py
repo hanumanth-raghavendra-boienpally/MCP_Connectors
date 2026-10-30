@@ -85,6 +85,8 @@ def _error_detail(resp: httpx.Response) -> str:
 
 def _raise_for_status(resp: httpx.Response) -> None:
     status = resp.status_code
+    if 300 <= status < 400:
+        raise ToolError(f"Postman answered with a redirect (HTTP {status}). Redirects are not followed, so credentials never go to another address.")
     if status < 400:
         return
     if status == 401:
@@ -109,7 +111,7 @@ async def _postman(
     path: str,
     *,
     params: dict[str, Any] | None = None,
-    body: dict[str, Any] | None = None,
+    body: dict[str, Any] | list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Call the Postman API as the current caller."""
     headers = {"X-Api-Key": get_api_key(), "Accept": "application/json"}
@@ -329,6 +331,93 @@ async def create_environment(
     d = await _postman("POST", "/environments", params=params, body={"environment": {"name": name, "values": values}})
     e = d.get("environment", {})
     return {"id": e.get("id"), "uid": e.get("uid"), "name": e.get("name")}
+
+
+@mcp.tool(annotations=WRITE)
+async def add_request(
+    collection_id: Annotated[str, Field(description="Collection ID from list_collections")],
+    name: Annotated[str, Field(min_length=1, max_length=200)],
+    url: Annotated[str, Field(min_length=1, max_length=2000, description="e.g. https://api.example.com/orders or {{baseUrl}}/orders")],
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = "GET",
+    headers: Annotated[dict[str, str] | None, Field(description="Request headers")] = None,
+    body: Annotated[str | None, Field(description="Raw body text, e.g. a JSON string")] = None,
+    folder_id: Annotated[str | None, Field(description="Put it in this folder of the collection (optional)")] = None,
+    description: Annotated[str | None, Field(max_length=5000)] = None,
+) -> dict[str, Any]:
+    """Add one request to an existing collection. Nothing else in the collection changes."""
+    payload: dict[str, Any] = {"name": name, "method": method, "url": url}
+    if description:
+        payload["description"] = description
+    if headers:
+        payload["headerData"] = [{"key": k, "value": v} for k, v in headers.items()]
+    if body is not None:
+        payload["dataMode"] = "raw"
+        payload["rawModeData"] = body
+    params = {"folder": _id(folder_id, "folder")} if folder_id else None
+    d = await _postman("POST", f"/collections/{_id(collection_id, 'collection')}/requests", params=params, body=payload)
+    data = d.get("data") or {}
+    return {"id": data.get("id") or d.get("model_id"), "name": data.get("name", name), "collection_id": collection_id}
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+async def update_environment(
+    environment_id: Annotated[str, Field(description="Environment ID from list_environments")],
+    set_variables: Annotated[dict[str, str] | None, Field(description='Variables to change or add, e.g. {"baseUrl": "https://staging.example.com"}')] = None,
+    remove_keys: Annotated[list[str] | None, Field(description="Variable keys to delete")] = None,
+    secret_keys: Annotated[list[str] | None, Field(description="Keys from set_variables to store as 'secret' (masked)")] = None,
+) -> dict[str, Any]:
+    """Change, add or remove variables in an existing environment.
+
+    Only the variables you name are touched; every other variable (including
+    secrets) stays exactly as it is. Values are never echoed back.
+    """
+    eid = _id(environment_id, "environment")
+    to_set = set_variables or {}
+    to_remove = list(dict.fromkeys(remove_keys or []))
+    secrets_wanted = set(secret_keys or [])
+    if not to_set and not to_remove:
+        raise ToolError("Nothing to change: give set_variables and/or remove_keys.")
+    both = set(to_set) & set(to_remove)
+    if both:
+        raise ToolError(f"Keys cannot be both set and removed: {', '.join(sorted(both))}")
+    if secrets_wanted - set(to_set):
+        raise ToolError("secret_keys must be keys in set_variables.")
+
+    env = (await _postman("GET", f"/environments/{eid}")).get("environment", {})
+    values = env.get("values") or []
+    keys = [v.get("key") for v in values]
+    involved = set(to_set) | set(to_remove)
+    dupes = sorted(k for k in involved if keys.count(k) > 1)
+    if dupes:
+        raise ToolError(f"The environment has duplicate keys, so the change would be ambiguous: {', '.join(dupes)}")
+    missing = [k for k in to_remove if k not in keys]
+    if missing:
+        raise ToolError(f"Not in the environment: {', '.join(missing)}")
+
+    # Postman applies one kind of operation per request, so changes go in up to three
+    # targeted PATCH calls: replace existing values, append new ones, then remove
+    # (highest index first, so earlier removals don't shift later ones).
+    replace_ops, add_ops = [], []
+    updated, added = [], []
+    for key, value in to_set.items():
+        if key in keys:
+            i = keys.index(key)
+            replace_ops.append({"op": "replace", "path": f"/values/{i}/value", "value": value})
+            if key in secrets_wanted and values[i].get("type") != "secret":
+                replace_ops.append({"op": "replace", "path": f"/values/{i}/type", "value": "secret"})
+            updated.append(key)
+        else:
+            add_ops.append({"op": "add", "path": f"/values/{len(values) + len(add_ops)}", "value": {
+                "key": key, "value": value, "type": "secret" if key in secrets_wanted else "default", "enabled": True}})
+            added.append(key)
+    remove_ops = [{"op": "remove", "path": f"/values/{keys.index(k)}"}
+                  for k in sorted(to_remove, key=keys.index, reverse=True)]
+    calls = 0
+    for ops in (replace_ops, add_ops, remove_ops):
+        if ops:
+            await _postman("PATCH", f"/environments/{eid}", body=ops)
+            calls += 1
+    return {"id": eid, "updated": updated, "added": added, "removed": to_remove, "patch_calls": calls}
 
 
 @mcp.tool(annotations=DESTRUCTIVE)

@@ -147,12 +147,25 @@ async def main() -> int:
             listed = [c["id"] for c in (await tool("list_collections", {"workspace_id": ws_id}))["collections"]]
             expect(col["id"] in listed, "list_collections shows it in the workspace")
 
+            # 4b. Add a request to the EXISTING collection, confirm directly; the others stay.
+            added = await tool("add_request", {
+                "collection_id": col["id"], "name": "Echo PUT", "method": "PUT",
+                "url": "https://postman-echo.com/put", "headers": {"Content-Type": "application/json"},
+                "body": f'{{"check": "{tag}", "edited": true}}',
+            })
+            record("PASS" if added.get("id") else "FAIL", "add_request returned an ID", str(added.get("id")))
+            r = await direct.get(f"/collections/{col['id']}")
+            items = r.json().get("collection", {}).get("item", []) if r.status_code == 200 else []
+            methods = {i.get("name"): (i.get("request") or {}).get("method") for i in items}
+            expect(methods == {"Echo GET": "GET", "Echo POST": "POST", "Echo PUT": "PUT"},
+                   "new request really in the collection, existing ones untouched (direct check)")
+
             # 5. Environment with a secret, confirm directly, check the connector masks it.
             fake_secret = f"not-a-real-secret-{tag}"
             env = await tool("create_environment", {
                 "name": env_name,
                 "workspace_id": ws_id,
-                "variables": {"baseUrl": "https://postman-echo.com", "token": fake_secret},
+                "variables": {"baseUrl": "https://postman-echo.com", "token": fake_secret, "obsolete": "remove-me"},
                 "secret_keys": ["token"],
             })
             created["environment"] = env["id"]
@@ -160,11 +173,30 @@ async def main() -> int:
             r = await direct.get(f"/environments/{env['id']}")
             real_env = r.json().get("environment", {}) if r.status_code == 200 else {}
             types = {v.get("key"): v.get("type") for v in real_env.get("values", [])}
-            expect(real_env.get("name") == env_name and types == {"baseUrl": "default", "token": "secret"},
+            expect(real_env.get("name") == env_name
+                   and types == {"baseUrl": "default", "token": "secret", "obsolete": "default"},
                    "environment really exists in Postman, token stored as secret (direct check)")
             vars_via = {v["key"]: v["value"] for v in (await tool("get_environment", {"environment_id": env["id"]}))["variables"]}
             expect(vars_via.get("baseUrl") == "https://postman-echo.com" and vars_via.get("token") == "********",
                    "get_environment shows baseUrl and masks the secret")
+
+            # 5b. Edit the EXISTING environment: change one, add one, remove one; confirm directly.
+            new_base = f"https://postman-echo.com/{tag}"
+            upd = await tool("update_environment", {
+                "environment_id": env["id"],
+                "set_variables": {"baseUrl": new_base, "region": "ap-south-1"},
+                "remove_keys": ["obsolete"],
+            })
+            r = await direct.get(f"/environments/{env['id']}")
+            after = {v.get("key"): v for v in (r.json().get("environment", {}).get("values", []) if r.status_code == 200 else [])}
+            expect(upd.get("updated") == ["baseUrl"] and upd.get("added") == ["region"] and upd.get("removed") == ["obsolete"]
+                   and set(after) == {"baseUrl", "token", "region"}
+                   and after["baseUrl"].get("value") == new_base and after["region"].get("value") == "ap-south-1"
+                   and after["token"].get("type") == "secret",
+                   "environment really edited in Postman: 1 changed, 1 added, 1 removed, secret kept (direct check)")
+            vars_via = {v["key"]: v["value"] for v in (await tool("get_environment", {"environment_id": env["id"]}))["variables"]}
+            expect(vars_via == {"baseUrl": new_base, "token": "********", "region": "ap-south-1"},
+                   "get_environment shows the edits and still masks the secret")
             listed = [e["id"] for e in (await tool("list_environments", {"workspace_id": ws_id}))["environments"]]
             expect(env["id"] in listed, "list_environments shows it in the workspace")
             ws = await tool("get_workspace", {"workspace_id": ws_id})
@@ -174,8 +206,9 @@ async def main() -> int:
             # 6. Eyes-on moment.
             print("\nLOOK NOW: open the Postman app (or go.postman.co in your browser).")
             print(f"In workspace {ws_name!r} you should see:")
-            print(f"  Collections  -> {col_name!r} with requests 'Echo GET' and 'Echo POST'")
-            print(f"  Environments -> {env_name!r} with baseUrl, and token shown as a masked secret")
+            print(f"  Collections  -> {col_name!r} with requests 'Echo GET', 'Echo POST' and 'Echo PUT'")
+            print(f"  Environments -> {env_name!r} with baseUrl, region, and token shown as a masked secret")
+            print("                  ('obsolete' was removed by update_environment)")
             print("Optional: open 'Echo GET' and click Send; Postman Echo answers with your check value.")
             print("Take a screenshot.")
             if pause:

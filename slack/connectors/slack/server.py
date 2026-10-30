@@ -56,6 +56,8 @@ async def _slack(
         except httpx.HTTPError as exc:
             raise ToolError(f"Could not reach the Slack API ({type(exc).__name__}).") from None
 
+    if 300 <= resp.status_code < 400:
+        raise ToolError(f"Slack answered with a redirect (HTTP {resp.status_code}). Redirects are not followed, so credentials never go to another address.")
     if resp.status_code == 429:
         retry = resp.headers.get("retry-after", "unknown")
         raise ToolError(f"Slack rate limit reached. Retry after {retry} seconds.")

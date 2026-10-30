@@ -104,8 +104,10 @@ def test_tools_are_listed_with_correct_hints(connector):
     assert {
         "get_me", "list_workspaces", "get_workspace", "list_collections", "get_collection",
         "list_environments", "get_environment", "create_collection", "create_environment",
-        "delete_collection", "delete_environment",
+        "delete_collection", "delete_environment", "add_request", "update_environment",
     } <= set(tools)
+    assert tools["add_request"].annotations.read_only_hint is False
+    assert tools["update_environment"].annotations.destructive_hint is True
     assert tools["get_collection"].annotations.read_only_hint is True
     assert tools["create_collection"].annotations.read_only_hint is False
     assert tools["delete_collection"].annotations.destructive_hint is True
@@ -250,3 +252,103 @@ def test_region_header_picks_a_fixed_host(monkeypatch):
     assert s._base_url() == "https://api.eu.postman.com"
     monkeypatch.setattr(s, "get_optional_header", lambda name: None)
     assert s._base_url() == "https://api.postman.com"
+
+
+def test_redirects_are_never_followed(connector):
+    # A redirect could carry the caller's credentials to another address. The
+    # fake redirects to /trap; the connector must refuse and never reach it.
+    fake.CALLS.clear()
+    with pytest.raises(ToolError, match="redirect"):
+        run(_call(_key(KEY_A), "get_workspace", {"workspace_id": "redirect"}))
+    assert not [c for c in fake.CALLS if c["path"] == "/trap"]
+
+
+
+def _env_values(key: str, env_id: str) -> dict[str, dict]:
+    """What Postman itself stores (read from the fake, not through the connector)."""
+    env = fake.ACCOUNTS[key]["environments"][env_id]["environment"]
+    return {v["key"]: v for v in env["values"]}
+
+
+def test_add_request_appends_only_to_the_callers_collection(connector):
+    col = run(_call(_key(KEY_A), "create_collection", {
+        "name": "Orders", "requests": [{"name": "List", "method": "GET", "url": "https://x/orders"}]})).data
+    fake.CALLS.clear()
+    res = run(_call(_key(KEY_A), "add_request", {
+        "collection_id": col["id"], "name": "Create", "method": "POST", "url": "{{baseUrl}}/orders",
+        "headers": {"Content-Type": "application/json"}, "body": '{"qty": 2}'})).data
+    assert res["id"] and res["name"] == "Create"
+    sent = [c for c in fake.CALLS if c["path"] == f"/collections/{col['id']}/requests"][0]
+    assert sent["key"] == KEY_A and sent["body"] == {
+        "name": "Create", "method": "POST", "url": "{{baseUrl}}/orders",
+        "headerData": [{"key": "Content-Type", "value": "application/json"}],
+        "dataMode": "raw", "rawModeData": '{"qty": 2}'}
+    got = run(_call(_key(KEY_A), "get_collection", {"collection_id": col["id"]})).data
+    assert [(r["name"], r["method"]) for r in got["requests"]] == [("List", "GET"), ("Create", "POST")]
+    with pytest.raises(ToolError, match="404"):
+        run(_call(_key(KEY_B), "add_request", {"collection_id": col["id"], "name": "x", "url": "https://x"}))
+    assert len(fake.ACCOUNTS[KEY_A]["collections"][col["id"]]["collection"]["item"]) == 2
+
+
+def test_update_environment_touches_only_named_variables(connector):
+    env = run(_call(_key(KEY_A), "create_environment", {
+        "name": "Staging",
+        "variables": {"baseUrl": "https://old", "token": "s3cret-value", "a": "1", "b": "2", "c": "3"},
+        "secret_keys": ["token"]})).data
+    fake.CALLS.clear()
+    res = run(_call(_key(KEY_A), "update_environment", {
+        "environment_id": env["id"],
+        "set_variables": {"baseUrl": "https://new", "region": "ap-south-1", "apiKey": "k-123"},
+        "secret_keys": ["apiKey"],
+        "remove_keys": ["a", "c"]})).data
+    assert res == {"id": env["id"], "updated": ["baseUrl"], "added": ["region", "apiKey"],
+                   "removed": ["a", "c"], "patch_calls": 3}
+    assert "https://new" not in str(res) and "k-123" not in str(res)  # values never echoed
+    stored = _env_values(KEY_A, env["id"])
+    assert set(stored) == {"baseUrl", "token", "b", "region", "apiKey"}  # a and c gone, b kept
+    assert stored["baseUrl"]["value"] == "https://new" and stored["b"]["value"] == "2"
+    assert stored["token"] == {"key": "token", "value": "s3cret-value", "type": "secret", "enabled": True}
+    assert stored["apiKey"]["type"] == "secret" and stored["region"]["type"] == "default"
+    patches = [c["body"] for c in fake.CALLS if c["method"] == "PATCH"]
+    assert [{o["op"] for o in ops} for ops in patches] == [{"replace"}, {"add"}, {"remove"}]
+    assert all(c["key"] == KEY_A for c in fake.CALLS)
+    shown = {v["key"]: v["value"] for v in run(_call(_key(KEY_A), "get_environment", {"environment_id": env["id"]})).data["variables"]}
+    assert shown["apiKey"] == "********" and shown["token"] == "********" and shown["region"] == "ap-south-1"
+
+
+def test_update_environment_can_turn_an_existing_value_secret(connector):
+    env = run(_call(_key(KEY_B), "create_environment", {"name": "E", "variables": {"pw": "old"}})).data
+    run(_call(_key(KEY_B), "update_environment", {"environment_id": env["id"],
+                                                  "set_variables": {"pw": "new"}, "secret_keys": ["pw"]}))
+    assert _env_values(KEY_B, env["id"])["pw"] == {"key": "pw", "value": "new", "type": "secret", "enabled": True}
+
+
+def test_update_environment_refuses_unclear_requests(connector):
+    env = run(_call(_key(KEY_A), "create_environment", {"name": "E2", "variables": {"x": "1"}})).data
+    cases = [
+        ({}, "Nothing to change"),
+        ({"set_variables": {"x": "2"}, "remove_keys": ["x"]}, "both set and removed"),
+        ({"set_variables": {"x": "2"}, "secret_keys": ["y"]}, "secret_keys must be keys"),
+        ({"remove_keys": ["nope"]}, "Not in the environment"),
+    ]
+    fake.CALLS.clear()
+    for args, msg in cases:
+        with pytest.raises(ToolError, match=msg):
+            run(_call(_key(KEY_A), "update_environment", {"environment_id": env["id"], **args}))
+    assert not [c for c in fake.CALLS if c["method"] == "PATCH"]  # nothing was changed
+    assert _env_values(KEY_A, env["id"]) == {"x": {"key": "x", "value": "1", "type": "default", "enabled": True}}
+
+
+def test_update_environment_refuses_ambiguous_duplicate_keys(connector):
+    env = run(_call(_key(KEY_A), "create_environment", {"name": "Dup", "variables": {"k": "1"}})).data
+    fake.ACCOUNTS[KEY_A]["environments"][env["id"]]["environment"]["values"].append(
+        {"key": "k", "value": "2", "type": "default", "enabled": True})
+    with pytest.raises(ToolError, match="duplicate keys"):
+        run(_call(_key(KEY_A), "update_environment", {"environment_id": env["id"], "set_variables": {"k": "3"}}))
+
+
+def test_one_caller_cannot_edit_another_callers_environment(connector):
+    env = run(_call(_key(KEY_A), "create_environment", {"name": "Mine", "variables": {"x": "1"}})).data
+    with pytest.raises(ToolError, match="404"):
+        run(_call(_key(KEY_B), "update_environment", {"environment_id": env["id"], "set_variables": {"x": "hacked"}}))
+    assert _env_values(KEY_A, env["id"])["x"]["value"] == "1"

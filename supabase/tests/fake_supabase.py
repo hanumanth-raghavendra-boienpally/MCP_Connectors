@@ -14,7 +14,7 @@ import time
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 CALLS: list[dict] = []  # {"method", "path", "token", "query", "body"}
@@ -140,6 +140,8 @@ async def project(request: Request):
     if token is None:
         return _unauth()
     ref = request.path_params["ref"]
+    if ref == "redirectredirectredi":
+        return RedirectResponse("/trap", status_code=302)
     p = _owned(token, ref)
     if p is None:
         return _forbidden()
@@ -278,6 +280,11 @@ async def storage_config(request: Request):
     return JSONResponse({"fileSizeLimit": 52428800, "features": {"imageTransformation": {"enabled": False}}})
 
 
+async def trap(request: Request):
+    await _auth(request)
+    return JSONResponse({})
+
+
 async def rate_limited(request: Request):
     await _auth(request)
     return JSONResponse({"message": "Too many requests"}, status_code=429, headers={"X-RateLimit-Reset": "7"})
@@ -288,6 +295,7 @@ app = Starlette(routes=[
     Route("/v1/organizations/{slug}", organization),
     Route("/v1/projects", projects),
     Route("/v1/projects/rrrrrrrrrrrrrrrrrrrr", rate_limited),
+    Route("/trap", trap, methods=["GET", "POST"]),
     Route("/v1/projects/{ref}", project),
     Route("/v1/projects/{ref}/database/query", query, methods=["POST"]),
     Route("/v1/projects/{ref}/database/migrations", migrations, methods=["GET", "POST"]),

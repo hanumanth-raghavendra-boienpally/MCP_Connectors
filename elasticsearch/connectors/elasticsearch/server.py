@@ -37,6 +37,7 @@ READ_ONLY = {"readOnlyHint": True, "openWorldHint": True}
 WRITE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True}
 
 MAX_LISTED_INDICES = 200
+MAX_SHARD_ROWS = 500
 _INDEX_RE = re.compile(r"^[A-Za-z0-9_.*,+\-]{1,255}$")
 
 
@@ -60,6 +61,8 @@ def _index(value: str) -> str:
 
 def _raise_for_status(resp: httpx.Response) -> None:
     status = resp.status_code
+    if 300 <= status < 400:
+        raise ToolError(f"Elasticsearch answered with a redirect (HTTP {status}). Redirects are not followed, so credentials never go to another address.")
     if status < 400:
         return
     if status == 401:
@@ -150,6 +153,40 @@ async def list_indices(
             for r in rows[:MAX_LISTED_INDICES]
         ],
         "truncated": len(rows) > MAX_LISTED_INDICES,
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_shards(
+    pattern: Annotated[str, Field(description="Index name or wildcard, e.g. 'logs-*'")] = "*",
+) -> dict[str, Any]:
+    """Show how indices are split into shards, where each shard lives and which are unassigned (why an index is yellow or red)."""
+    rows = await _es(
+        "GET",
+        f"/_cat/shards/{_index(pattern)}",
+        params={"format": "json", "h": "index,shard,prirep,state,docs,store,node,unassigned.reason",
+                "s": "index,shard,prirep"},
+    )
+    rows = rows if isinstance(rows, list) else []
+    by_state: dict[str, int] = {}
+    for r in rows:
+        by_state[r.get("state", "UNKNOWN")] = by_state.get(r.get("state", "UNKNOWN"), 0) + 1
+    return {
+        "by_state": by_state,
+        "shards": [
+            {
+                "index": r.get("index"),
+                "shard": r.get("shard"),
+                "primary": r.get("prirep") == "p",
+                "state": r.get("state"),
+                "docs": r.get("docs"),
+                "store": r.get("store"),
+                "node": r.get("node"),
+                "unassigned_reason": r.get("unassigned.reason"),
+            }
+            for r in rows[:MAX_SHARD_ROWS]
+        ],
+        "truncated": len(rows) > MAX_SHARD_ROWS,
     }
 
 

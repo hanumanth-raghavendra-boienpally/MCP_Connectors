@@ -5,8 +5,8 @@ Elasticsearch DIRECTLY (not through the connector) to confirm it happened.
 It uses a throwaway index named mcp-verify-<random> and deletes it at the end.
 
 Needs the connector and an Elasticsearch running. Usage:
-  PowerShell:  $env:ES_URL = "http://localhost:9201"; $env:ES_API_KEY = "anything"
-  cmd:         set ES_URL=http://localhost:9201   and   set ES_API_KEY=anything
+  PowerShell:  $env:ES_URL = "http://localhost:9200"; $env:ES_API_KEY = "anything"
+  cmd:         set ES_URL=http://localhost:9200   and   set ES_API_KEY=anything
   then:        uv run python scripts/verify_e2e.py [connector-url] [--no-pause]
 
 With the local Docker Elasticsearch (security off) any ES_API_KEY works.
@@ -110,6 +110,12 @@ async def main() -> int:
             expect("msg" in mapping[index]["mappings"]["properties"], "get_mapping lists the fields")
             listed = [i["index"] for i in (await tool("list_indices", {"pattern": "mcp-verify-*"}))["indices"]]
             expect(index in listed, "list_indices shows the index")
+            shards = await tool("get_shards", {"pattern": index})
+            via = sorted((s["shard"], s["primary"], s["state"]) for s in shards["shards"])
+            raw = (await direct.get(f"/_cat/shards/{index}", params={"format": "json", "h": "shard,prirep,state"})).json()
+            real = sorted((r["shard"], r["prirep"] == "p", r["state"]) for r in raw)
+            expect(bool(via) and via == real, "get_shards matches Elasticsearch's own shard list (direct check)",
+                   ", ".join(f"{state}: {n}" for state, n in sorted(shards["by_state"].items())))
             try:
                 rows = (await tool("esql_query", {"query": f"FROM {index} | LIMIT 5"}))["rows"]
                 expect(any(marker in str(row) for row in rows), "esql_query returns the document")

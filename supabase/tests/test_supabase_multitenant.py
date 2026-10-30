@@ -376,3 +376,12 @@ def test_schema_queries_do_not_use_information_schema(connector):
     sent = [b["query"] for b in sent_bodies("/database/query")]
     assert len(sent) == 3 and all(b["read_only"] is True for b in sent_bodies("/database/query"))
     assert not any("information_schema" in q for q in sent)
+
+
+def test_redirects_are_never_followed(connector):
+    # A redirect could carry the caller's credentials to another address. The
+    # fake redirects to /trap; the connector must refuse and never reach it.
+    fake.CALLS.clear()
+    with pytest.raises(ToolError, match="redirect"):
+        call(A, "get_project", {"project_id": "redirectredirectredi"})
+    assert not [c for c in fake.CALLS if c["path"] == "/trap"]

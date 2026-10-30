@@ -9,12 +9,20 @@ Needs **Python 3.12 or newer** and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --extra dev
-uv run pytest -q        # 34 tests, about 10 seconds, no Elasticsearch needed
+uv run pytest -q        # 37 tests, about 10 seconds, no Elasticsearch needed
 ```
 
 The tests start the real connector next to two fake Elasticsearch clusters and
 check that concurrent callers never see each other's data, and that
 unsafe cluster URLs are refused.
+
+Without `uv` (classic pip), in PowerShell inside this `elasticsearch` folder:
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest
+python -m pytest -q
+```
 
 ## Run it
 
@@ -57,6 +65,7 @@ Never put credentials inside the URL.
 | `cluster_health` | Status, nodes, shards | read-only |
 | `list_indices` | Indices with health, doc count, size | read-only |
 | `get_mapping` | Field names and types of an index | read-only |
+| `get_shards` | Shards per index, their state and node, and why any are unassigned (why an index is yellow or red) | read-only |
 | `search` | Query DSL search (size up to 100, paging, sort, field filter) | read-only |
 | `count` | Count documents matching a query | read-only |
 | `esql_query` | ES\|QL query (needs Elasticsearch 8.11+) | read-only |
@@ -107,7 +116,7 @@ set ES_URL=http://127.0.0.1:9201
 set ES_API_KEY=anything
 uv run python scripts/verify_e2e.py
 ```
-Expected last line: `Summary: 11 passed, 0 failed`. If the connector or Elasticsearch is
+Expected last line: `Summary: 12 passed, 0 failed`. If the connector or Elasticsearch is
 not answering, it says which one instead of failing with a trace.
 
 ## In Docker
@@ -136,6 +145,21 @@ It shares no code with other connectors. To move it into a repo, copy the
 whole `elasticsearch/` folder and leave out `.venv`, `__pycache__`,
 `.pytest_cache` and `*.egg-info`.
 
+## Compared with the official Elasticsearch MCP server
+
+Elastic's own server (`elastic/mcp-server-elasticsearch`) is **deprecated** and only gets
+critical security fixes; its successor is the Agent Builder MCP endpoint inside Kibana 9.2+.
+
+| | Official (deprecated) | This connector |
+|---|---|---|
+| Credentials | Fixed per server in environment variables (one user) | Per request in headers (any number of users) |
+| Cluster address | Fixed per server | Per request, checked against an allowlist (SSRF protection) |
+| `list_indices`, `get_mappings`, `search`, ES\|QL | Yes | Yes |
+| `get_shards` | Yes | Yes |
+| `cluster_health`, `count`, `get_document` | No | Yes |
+| Write tools (`index_document`, `delete_document`) | No | Yes, marked destructive |
+| Needs Kibana | No (successor: yes, 9.2+) | No; any Elasticsearch 8.11+ (ES\|QL), 8.x for the rest |
+
 ## Security checks (2026-10-30)
 
 Run on the whole repo with the company's verification steps:
@@ -143,7 +167,7 @@ Run on the whole repo with the company's verification steps:
 | Check | Tool | Result |
 |---|---|---|
 | Secrets in code and full git history | Gitleaks 8.30 | No leaks found |
-| Known vulnerabilities in pinned libraries (`uv.lock`) | Trivy 0.76 | 0 (all severities) |
+| Known vulnerabilities in pinned libraries (`uv.lock` and `requirements.txt`) | Trivy 0.76 | 0 (all severities) |
 | Dockerfile misconfiguration | Trivy 0.76 | 0 |
 | Signed release artifacts | Cosign | None published, so not applicable |
 | Library licenses | pip-licenses | All permissive (MIT, BSD, Apache-2.0, ISC; `certifi` is MPL-2.0, used unmodified) |
@@ -151,10 +175,16 @@ Run on the whole repo with the company's verification steps:
 This folder has no LICENSE file of its own yet; the license for company code is
 pending a decision. Re-run the scans after any dependency change.
 
-## Status (verified 2026-10-28)
+## Status (2026-10-30)
 
-- Automated suite against fake clusters: 34 passing. Breaking the allowlist on purpose makes 3 of them fail.
-- Run against a real Elasticsearch 8.15 in Docker: all nine tools work.
-- `scripts/verify_e2e.py` against the same real Elasticsearch: 11 of 11 checks pass, each
-  confirmed directly in Elasticsearch, not only through the connector.
+- 37 automated tests against two fake clusters. Deliberately breaking each protection
+  makes tests fail: first caller's key reused (7), first caller's cluster reused (6),
+  private addresses allowed (6), wildcard look-alike hosts (1), index-name check off (1),
+  key leaked in an error (1), redirects followed (1), and for `get_shards`: primary and
+  replica swapped (1), pattern not validated (1), state counts wrong (1).
+- Redirects are refused with a clear error and never followed, so credentials cannot be
+  sent to another address. A test redirects to a trap address and proves it is never reached.
+- Real Elasticsearch 8.15 in Docker: `scripts/verify_e2e.py` passes 12 of 12, each action
+  confirmed directly in Elasticsearch, including `get_shards` matching Elasticsearch's own
+  shard list.
 - Not yet tested through the workflow designer with an agent calling the tools.

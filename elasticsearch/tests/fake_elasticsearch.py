@@ -11,7 +11,7 @@ import time
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 CALLS: list[dict] = []  # {"cluster": str, "method": str, "path": str, "auth": str | None, "body": dict | None}
@@ -45,6 +45,19 @@ def make_app(cluster: str, api_key: str, docs: list[dict]) -> Starlette:
         return JSONResponse(
             [{"index": f"{cluster}-logs", "health": "green", "status": "open", "docs.count": str(len(store)), "store.size": "1kb"}]
         )
+
+    async def cat_shards(request: Request):
+        if (r := check(request)) is not None:
+            return r
+        name = f"{cluster}-logs"
+        return JSONResponse([
+            {"index": name, "shard": "0", "prirep": "p", "state": "STARTED", "docs": str(len(store)),
+             "store": "1kb", "node": f"{cluster}-node", "unassigned.reason": None},
+            {"index": name, "shard": "1", "prirep": "p", "state": "STARTED", "docs": "0",
+             "store": "1kb", "node": f"{cluster}-node", "unassigned.reason": None},
+            {"index": name, "shard": "0", "prirep": "r", "state": "UNASSIGNED", "docs": None,
+             "store": None, "node": None, "unassigned.reason": "INDEX_CREATED"},
+        ])
 
     async def mapping(request: Request):
         if (r := check(request)) is not None:
@@ -114,6 +127,14 @@ def make_app(cluster: str, api_key: str, docs: list[dict]) -> Starlette:
             return JSONResponse({"_id": doc_id, "result": "not_found"}, status_code=404)
         return JSONResponse({"_id": doc_id, "result": "deleted"})
 
+    async def redirect(request: Request):
+        check(request)
+        return RedirectResponse("/trap", status_code=302)
+
+    async def trap(request: Request):
+        check(request)
+        return JSONResponse({"took": 1, "hits": {"total": {"value": 0}, "hits": []}})
+
     async def too_many(request: Request):
         check(request)
         return JSONResponse(
@@ -127,8 +148,12 @@ def make_app(cluster: str, api_key: str, docs: list[dict]) -> Starlette:
             Route("/_cluster/health", health),
             Route("/_cat/indices", cat_indices),
             Route("/_cat/indices/{pattern}", cat_indices),
+            Route("/_cat/shards", cat_shards),
+            Route("/_cat/shards/{pattern}", cat_shards),
             Route("/_query", esql, methods=["POST"]),
             Route("/busy/_search", too_many, methods=["POST"]),
+            Route("/redirect-me/_search", redirect, methods=["POST"]),
+            Route("/trap", trap, methods=["GET", "POST"]),
             Route("/{index}/_mapping", mapping),
             Route("/{index}/_search", search, methods=["POST"]),
             Route("/{index}/_count", count, methods=["POST"]),

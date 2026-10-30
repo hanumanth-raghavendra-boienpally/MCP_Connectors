@@ -12,7 +12,7 @@ import uuid
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 CALLS: list[dict] = []  # {"method", "path", "key", "query", "body"}
@@ -94,6 +94,8 @@ async def workspace(request: Request):
     if acct is None:
         return _unauth()
     ws = request.path_params["id"]
+    if ws == "redirect":
+        return RedirectResponse("/trap", status_code=302)
     if ws not in acct["workspaces"]:
         return _not_found("workspace", ws)
     cols = [{"id": i, "name": c["collection"]["info"]["name"], "uid": f"1-{i}"}
@@ -101,6 +103,40 @@ async def workspace(request: Request):
     envs = [{"id": i, "name": e["environment"]["name"], "uid": f"1-{i}"}
             for i, e in acct["environments"].items() if e["workspace"] == ws]
     return JSONResponse({"workspace": {**acct["workspaces"][ws], "collections": cols, "environments": envs}})
+
+
+async def collection_requests(request: Request):
+    body = await request.json()
+    acct = await _account(request, body)
+    if acct is None:
+        return _unauth()
+    cid = request.path_params["id"]
+    if cid not in acct["collections"]:
+        return _not_found("collection", cid)
+    rid = str(uuid.uuid4())
+    req = {"method": body.get("method", "GET"), "url": {"raw": body.get("url")}}
+    if body.get("headerData"):
+        req["header"] = [{"key": h["key"], "value": h["value"]} for h in body["headerData"]]
+    if body.get("dataMode") == "raw":
+        req["body"] = {"mode": "raw", "raw": body.get("rawModeData")}
+    item = {"id": rid, "name": body.get("name"), "request": req}
+    if not MODE["drop_writes"]:
+        items = acct["collections"][cid]["collection"]["item"]
+        folder = request.query_params.get("folder")
+        if folder:
+            target = next((it for it in items if it.get("id") == folder and "item" in it), None)
+            if target is None:
+                return _not_found("folder", folder)
+            target["item"].append(item)
+        else:
+            items.append(item)
+    return JSONResponse({"data": {"id": rid, "name": body.get("name"), "collection": cid}, "model_id": rid,
+                         "meta": {"action": "create", "model": "request"}})
+
+
+async def trap(request: Request):
+    await _account(request)
+    return JSONResponse({"workspace": {"id": "trap", "name": "trap"}})
 
 
 async def collections(request: Request):
@@ -172,6 +208,34 @@ async def environment(request: Request):
         if not MODE["drop_writes"]:
             acct["environments"].pop(eid)
         return JSONResponse({"environment": {"id": eid, "uid": f"1-{eid}"}})
+    if request.method == "PATCH":
+        ops = await request.json()
+        CALLS[-1]["body"] = ops
+        if len({o.get("op") for o in ops}) != 1:
+            return JSONResponse({"error": {"name": "invalidParamsError", "message": "One type of operation at a time"}},
+                                status_code=400)
+        values = [dict(v) for v in acct["environments"][eid]["environment"]["values"]]
+        try:
+            for o in ops:
+                parts = o["path"].strip("/").split("/")
+                if parts[0] != "values":
+                    raise ValueError(o["path"])
+                i = int(parts[1])
+                if o["op"] == "replace" and len(parts) == 3:
+                    values[i][parts[2]] = o["value"]
+                elif o["op"] == "add" and len(parts) == 2:
+                    if i > len(values):
+                        raise IndexError(i)
+                    values.insert(i, dict(o["value"]))
+                elif o["op"] == "remove" and len(parts) == 2:
+                    values.pop(i)
+                else:
+                    raise ValueError(o)
+        except (ValueError, IndexError, KeyError) as exc:
+            return JSONResponse({"error": {"name": "invalidParamsError", "message": f"bad op: {exc}"}}, status_code=400)
+        if not MODE["drop_writes"]:
+            acct["environments"][eid]["environment"]["values"] = values
+        return JSONResponse({"environment": acct["environments"][eid]["environment"]})
     return JSONResponse({"environment": acct["environments"][eid]["environment"]})
 
 
@@ -179,10 +243,12 @@ app = Starlette(routes=[
     Route("/me", me),
     Route("/workspaces", workspaces),
     Route("/workspaces/{id}", workspace),
+    Route("/trap", trap, methods=["GET", "POST"]),
     Route("/collections", collections, methods=["GET", "POST"]),
     Route("/collections/{id}", collection, methods=["GET", "DELETE"]),
+    Route("/collections/{id}/requests", collection_requests, methods=["POST"]),
     Route("/environments", environments, methods=["GET", "POST"]),
-    Route("/environments/{id}", environment, methods=["GET", "DELETE"]),
+    Route("/environments/{id}", environment, methods=["GET", "DELETE", "PATCH"]),
 ])
 
 

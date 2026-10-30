@@ -123,8 +123,9 @@ def test_tools_are_listed_with_correct_hints(connector):
     tools = run(go())
     assert {
         "cluster_health", "list_indices", "get_mapping", "search", "count",
-        "esql_query", "get_document", "index_document", "delete_document",
+        "esql_query", "get_document", "index_document", "delete_document", "get_shards",
     } <= set(tools)
+    assert tools["get_shards"].annotations.read_only_hint is True
     assert tools["search"].annotations.read_only_hint is True
     assert tools["esql_query"].annotations.read_only_hint is True
     assert tools["index_document"].annotations.read_only_hint is False
@@ -240,3 +241,32 @@ def test_bad_index_names_are_refused(connector):
     for bad in ["../_cluster/settings", "_security", "a b", "logs/../x"]:
         with pytest.raises(ToolError, match="Invalid index"):
             run(_call(_client("a"), "search", {"index": bad}))
+
+
+def test_redirects_are_never_followed(connector):
+    # A redirect could carry the caller's credentials to another address. The
+    # fake redirects to /trap; the connector must refuse and never reach it.
+    fake.CALLS.clear()
+    with pytest.raises(ToolError, match="redirect"):
+        run(_call(_client("a"), "search", {"index": "redirect-me"}))
+    assert not [c for c in fake.CALLS if c["path"] == "/trap"]
+
+
+def test_get_shards_reports_each_callers_cluster(connector):
+    fake.CALLS.clear()
+    a = run(_call(_client("a"), "get_shards", {"pattern": "logs-*"})).data
+    b = run(_call(_client("b"), "get_shards")).data
+    assert {sh["index"] for sh in a["shards"]} == {"cluster-a-logs"}
+    assert {sh["index"] for sh in b["shards"]} == {"cluster-b-logs"}
+    assert a["by_state"] == {"STARTED": 2, "UNASSIGNED": 1} and a["truncated"] is False
+    replica = [sh for sh in a["shards"] if not sh["primary"]][0]
+    assert replica["state"] == "UNASSIGNED" and replica["unassigned_reason"] == "INDEX_CREATED"
+    shard_calls = [c for c in fake.CALLS if c["path"].startswith("/_cat/shards")]
+    assert {c["cluster"] for c in shard_calls} == {"cluster-a", "cluster-b"}
+    for c in shard_calls:
+        assert c["auth"] == f"ApiKey {CLUSTERS['a' if c['cluster'] == 'cluster-a' else 'b']['key']}"
+
+
+def test_get_shards_refuses_bad_patterns(connector):
+    with pytest.raises(ToolError, match="Invalid index"):
+        run(_call(_client("a"), "get_shards", {"pattern": "../_cluster/settings"}))

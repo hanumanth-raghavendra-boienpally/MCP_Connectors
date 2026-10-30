@@ -17,7 +17,7 @@ Run in Command Prompt, inside this `supabase` folder:
 uv sync --extra dev
 uv run pytest -q
 ```
-Expect `32 passed` in about 10 seconds. No Supabase account is needed: the tests
+Expect `33 passed` in about 10 seconds. No Supabase account is needed: the tests
 start the real connector next to a fake Supabase API with two accounts, each
 with a project backed by a real in-memory database.
 
@@ -210,11 +210,14 @@ pending a decision. Re-run the scans after any dependency change.
 
 ## Status (2026-10-30)
 
-- 32 automated tests against a fake Supabase with two accounts. Deliberately
+- 33 automated tests against a fake Supabase with two accounts. Deliberately
   breaking each safety feature makes tests fail: caller isolation (7), destructive
-  guard (11), untrusted fence (3), read-only (2), project scope (2), key filter (1).
+  guard (11), untrusted fence (3), read-only (2), project scope (2), key filter (1),
+  redirects followed (1).
+- Redirects are refused with a clear error and never followed, so credentials cannot be
+  sent to another address. A test redirects to a trap address and proves it is never reached.
 - `scripts/verify_e2e.py` against a real Supabase project (fine-grained, project-scoped
-  token): 18 of 18 checks pass, each write confirmed directly in Supabase, and the
+  token): 18 of 18 checks pass (re-confirmed after the redirect change), each write confirmed directly in Supabase, and the
   read-only, destructive-SQL, project-scope and key-filter protections proven on real data.
 - The first real run caught a bug the fake could not: `list_tables` read primary keys
   from `information_schema`, which hides them from read-only users. It now reads

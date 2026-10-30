@@ -176,3 +176,17 @@ def test_rate_limit_is_reported_with_retry_after(connector):
 
     with pytest.raises(ToolError, match="Retry after 7"):
         asyncio.run(run())
+
+
+def test_redirects_are_never_followed(connector):
+    # A redirect could carry the caller's credentials to another address. The
+    # fake redirects to /trap; the connector must refuse and never reach it.
+    fake_slack.CALLS.clear()
+
+    async def run():
+        async with _client("xoxb-user-a") as c:
+            await c.call_tool("get_channel_history", {"channel_id": "CREDIRECT"})
+
+    with pytest.raises(ToolError, match="redirect"):
+        asyncio.run(run())
+    assert not [c for c in fake_slack.CALLS if c["path"] == "/trap"]
