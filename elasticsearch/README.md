@@ -102,7 +102,25 @@ With security off, Elasticsearch ignores the key, but the connector still requir
 
 **Why `127.0.0.1` and port 9201?** On some Windows machines `localhost:9200` stops answering from the host even though Elasticsearch is healthy inside the container (check with `docker exec <container-id> curl -s http://localhost:9200`). Using `127.0.0.1` and a fresh host port avoids it. If it still hangs, quit Docker Desktop, run `wsl --shutdown`, and start Docker Desktop again.
 
-If the connector itself runs in Docker, use `http://host.docker.internal:9201` as the cluster URL and put `host.docker.internal` in `ES_ALLOWED_HOSTS`.
+### Connector in Docker too
+
+Put both containers on one Docker network so the connector can reach Elasticsearch
+by name, and tell the check script the two addresses (Command Prompt, inside this
+`elasticsearch` folder, after `docker build -t mcp-elasticsearch .`):
+
+```cmd
+docker network create mcp-net
+docker run -d --name es-test --network mcp-net -p 127.0.0.1:9201:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+docker run -d --name mcp-es-test --network mcp-net -p 127.0.0.1:8000:8000 -e ES_ALLOWED_HOSTS=es-test mcp-elasticsearch
+set ES_URL=http://127.0.0.1:9201
+set ES_URL_FOR_CONNECTOR=http://es-test:9200
+set ES_API_KEY=anything
+uv run python scripts/verify_e2e.py
+docker rm -f mcp-es-test es-test
+docker network rm mcp-net
+```
+`ES_URL` is how this computer reaches Elasticsearch (for the direct checks);
+`ES_URL_FOR_CONNECTOR` is how the connector reaches it from inside Docker.
 
 ## End-to-end check: did it really happen in Elasticsearch?
 

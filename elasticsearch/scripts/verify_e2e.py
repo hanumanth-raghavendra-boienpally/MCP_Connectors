@@ -10,6 +10,11 @@ Needs the connector and an Elasticsearch running. Usage:
   then:        uv run python scripts/verify_e2e.py [connector-url] [--no-pause]
 
 With the local Docker Elasticsearch (security off) any ES_API_KEY works.
+
+Connector running in Docker? It reaches Elasticsearch at a different address than
+this script does. Set ES_URL to the address from your computer (for the direct
+checks) and ES_URL_FOR_CONNECTOR to the address from inside Docker, e.g.
+  set ES_URL=http://127.0.0.1:9201   and   set ES_URL_FOR_CONNECTOR=http://es-test:9200
 """
 
 import asyncio
@@ -50,7 +55,11 @@ async def main() -> int:
     marker = f"verify-{secrets.token_hex(6)}"
     print(f"Throwaway index: {index}   marker: {marker}\n")
 
-    headers = {"X-Elasticsearch-URL": es_url, **auth}
+    # The address the CONNECTOR uses can differ from ours (e.g. connector inside Docker).
+    connector_es_url = (os.environ.get("ES_URL_FOR_CONNECTOR") or es_url).rstrip("/")
+    if connector_es_url != es_url:
+        print(f"Connector reaches Elasticsearch at {connector_es_url}; direct checks use {es_url}\n")
+    headers = {"X-Elasticsearch-URL": connector_es_url, **auth}
     direct = httpx.AsyncClient(base_url=es_url, headers=auth, timeout=20)
 
     # Preflight: is everything we need actually running? Say so plainly if not.
